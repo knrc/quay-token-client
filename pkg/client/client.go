@@ -24,6 +24,7 @@ const (
 	serviceKeyPath      = "/keys/services/%s/keys/%s"
 	approveKeyPath      = "/api/v1/superuser/approvedkeys/%s"
 	deleteKeyPath       = "/api/v1/superuser/keys/%s"
+	getUserPath         = "/api/v1/superuser/users/%s"
 	dockerV2AuthPath    = "/v2/auth"
 	dockerV2CatalogPath = "/v2/_catalog"
 )
@@ -80,6 +81,15 @@ type DockerV2Claims struct {
 // DockerCatalogResponse represents the response from the Docker V2 /_catalog endpoint
 type DockerCatalogResponse struct {
 	Repositories []string `json:"repositories"`
+}
+
+// GetUserResponse represents the response from the superuser getUser endpoint
+type GetUserResponse struct {
+	UUID     string  `json:"uuid"`
+	Username string  `json:"username"`
+	Email    *string `json:"email,omitempty"`
+	Verified *bool   `json:"verified,omitempty"`
+	Enabled  *bool   `json:"enabled,omitempty"`
 }
 
 // NewClient creates a new Quay API client
@@ -222,10 +232,15 @@ func (c *Client) generateJWT(privateKey *rsa.PrivateKey, keyID string, serviceNa
 }
 
 // generateDockerV2JWT generates a Docker V2 compatible JWT
-func (c *Client) GenerateDockerV2JWT(privateKey *rsa.PrivateKey, serviceName, keyID, user, scope string) (string, error) {
+func (c *Client) GenerateDockerV2JWT(privateKey *rsa.PrivateKey, serviceName, keyID, username, scope string) (string, error) {
 	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: privateKey}, (&jose.SignerOptions{}).WithHeader("kid", keyID))
 	if err != nil {
 		return "", fmt.Errorf("failed to create signer: %w", err)
+	}
+
+	user, err := c.GetUser(username)
+	if err != nil {
+		return "", fmt.Errorf("failed to get user ID from registry: %w", err)
 	}
 
 	var accessClaims []DockerAccessClaim
@@ -255,19 +270,19 @@ func (c *Client) GenerateDockerV2JWT(privateKey *rsa.PrivateKey, serviceName, ke
 	claims := &DockerV2Claims{
 		Claims: jwt.Claims{
 			Issuer:    serviceName,
-			Subject:   user,
+			Subject:   username,
 			Audience:  []string{audience},
 			Expiry:    jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now().Add(-5 * time.Minute)),
 		},
 		Access: accessClaims,
-		// KEV: matches database user information, perhaps need to switch to external tokens
+		// KEV: matches database user information
 		Context: map[string]any{
 			"kind":             "user",
-			"user":             user,
+			"user":             username,
 			"entity_kind":      "user",
-			"entity_reference": "my-quor-user",
+			"entity_reference": user.UUID,
 		},
 	}
 
@@ -318,6 +333,19 @@ func (c *Client) DeleteServiceKey(keyID string) error {
 	}
 	log.Printf("Service key '%s' deleted successfully.", keyID)
 	return nil
+}
+
+// GetUser retrieves information about the user using the superuser endpoint
+func (c *Client) GetUser(username string) (*GetUserResponse, error) {
+	getUserURL := c.Config.QuayURL + fmt.Sprintf(getUserPath, username)
+
+	response := &GetUserResponse{}
+	err := c.handleRequest(getUserURL, "GET", nil, nil, response, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get user request failed: %w", err)
+	}
+
+	return response, nil
 }
 
 func (c *Client) handleRequest(requestUrl string, method string, payload any, headers map[string]string, response any, statusCodeErrors map[int]error) error {
