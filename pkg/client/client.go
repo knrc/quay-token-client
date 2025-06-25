@@ -352,8 +352,8 @@ func (c *Client) handleRequest(requestUrl string, method string, payload any, he
 	switch resp.StatusCode {
 	case http.StatusOK:
 		if response != nil {
-			if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-				return fmt.Errorf("failed to decode login response: %w", err)
+			if err := json.NewDecoder(resp.Body).Decode(response); err != nil {
+				return fmt.Errorf("failed to decode response: %w", err)
 			}
 		} else {
 			bodyBytes, _ := io.ReadAll(resp.Body)
